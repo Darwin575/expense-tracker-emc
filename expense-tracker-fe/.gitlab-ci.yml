@@ -1,0 +1,66 @@
+stages:
+  - docker-build-and-push
+  - trigger-jenkins
+
+docker-build-and-push:
+  stage: docker-build-and-push
+  image: docker:latest
+  services:
+    - name: docker:dind
+      command: ["--tls=false"]
+  before_script:
+    - apk add --no-cache curl bash unzip aws-cli
+    - echo "Configuring AWS CLI..."
+    - aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+    - aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+    - aws configure set default.region "$AWS_REGION"
+    - REPO_NAME="team-b-fe-expense-tracker"
+    - ECR_URL="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}"
+    - |
+      if ! aws ecr describe-repositories --repository-names "${REPO_NAME}" --region ${AWS_REGION} >/dev/null 2>&1; then
+        echo "Repository ${REPO_NAME} does not exist. Creating..."
+        aws ecr create-repository --repository-name "${REPO_NAME}" --region ${AWS_REGION}
+      else
+        echo "Repository ${REPO_NAME} exists."
+      fi
+    - echo "Logging in to AWS ECR..."
+    - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URL}
+    - docker buildx create --use
+    - docker buildx inspect --bootstrap
+  script:
+    - IMAGE_VERSION="staging-${CI_COMMIT_SHORT_SHA}"
+    - echo "Building staging Docker image..."
+    - docker build -t ${REPO_NAME}:latest -f Dockerfile .
+    - docker tag ${REPO_NAME}:latest ${ECR_URL}:${IMAGE_VERSION}
+    - docker push ${ECR_URL}:${IMAGE_VERSION}
+    - docker tag ${REPO_NAME}:latest ${ECR_URL}:latest
+    - docker push ${ECR_URL}:latest
+    - docker system prune -f
+    - docker volume prune -f
+  only:
+    - main
+  variables:
+    DOCKER_DRIVER: overlay2
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+
+trigger_jenkins_job:
+  stage: trigger-jenkins
+  image: curlimages/curl:latest
+
+  script:
+    - echo "Fetching Jenkins crumb..."
+    - |
+      CRUMB=$(curl -s -u "$JENKINS_USER:$JENKINS_API_TOKEN" \
+      "$JENKINS_URL/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,\":\",//crumb)")
+      echo "Crumb fetched"
+
+    - echo "Triggering Jenkins job..."
+    - |
+      curl -X POST \
+      -u "$JENKINS_USER:$JENKINS_API_TOKEN" \
+      -H "$CRUMB" \
+      "$JENKINS_URL/view/Local%20Deployment/job/cytech-expense-tracker/build?token=$JENKINS_TOKEN"
+
+  only:
+    - main

@@ -1,0 +1,173 @@
+version: "3.8"
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: expense_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Django Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: expense_backend
+    command: >
+      sh -c "
+        if [ \"$SAFE_MIGRATE\" = 'true' ]; then
+          echo 'Running safe migrations...';
+          python manage.py migrate --plan;
+        else
+          echo 'Running full migrations...';
+          python manage.py migrate;
+        fi &&
+        python manage.py collectstatic --noinput &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+    volumes:
+      - .:/app
+      - /app/venv
+      - /app/__pycache__
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DEBUG=True
+      - DB_HOST=db
+      - DB_PORT=5432
+      - SAFE_MIGRATE=${SAFE_MIGRATE}
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ../expense-tracker-fe
+      dockerfile: Dockerfile
+      target: base
+    container_name: expense_frontend
+    command: npm run dev
+    volumes:
+      - ../expense-tracker-fe:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    env_file:
+      - ../expense-tracker-fe/.env
+    depends_on:
+      - backend
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./staticfiles:/app/staticfiles
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  postgres_data:
+
+    # version: '3.8'
+
+    # services:
+    #   # PostgreSQL Database
+    #   db:
+    #     image: postgres:16-alpine
+    #     container_name: expense_db_prod
+    #     volumes:
+    #       - postgres_data_prod:/var/lib/postgresql/data
+    #     environment:
+    #       - POSTGRES_DB=${DB_NAME:-expense_manager}
+    #       - POSTGRES_USER=${DB_USER:-postgres}
+    #       - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    #     restart: unless-stopped
+    #     healthcheck:
+    #       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+    #       interval: 10s
+    #       timeout: 5s
+    #       retries: 5
+
+    #   # Django Backend
+    #   backend:
+    #     build:
+    #       context: ./backend
+    #       dockerfile: Dockerfile
+    #     container_name: expense_backend_prod
+    #     command: >
+    #       sh -c "python manage.py migrate &&
+    #              python manage.py collectstatic --noinput &&
+    #              gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    #     volumes:
+    #       - static_volume:/app/staticfiles
+    #     expose:
+    #       - "8000"
+    #     env_file:
+    #       - ./backend/.env.prod
+    #     environment:
+    #       - DB_HOST=db
+    #       - DB_PORT=5432
+    #       - POSTGRES_DB=${DB_NAME:-expense_manager}
+    #       - POSTGRES_USER=${DB_USER:-postgres_b}
+    #       - POSTGRES_PASSWORD=${DB_PASSWORD:-password}
+    #     depends_on:
+    #       db:
+    #         condition: service_healthy
+    #     restart: unless-stopped
+
+    #   # Next.js Frontend
+    #   frontend:
+    #     build:
+    #       context: ./frontend
+    #       dockerfile: Dockerfile
+    #     container_name: expense_frontend_prod
+    #     expose:
+    #       - "3000"
+    #     env_file:
+    #       - ./frontend/.env.prod
+    #     depends_on:
+    #       - backend
+    #     restart: unless-stopped
+
+    #   # Nginx Reverse Proxy
+    #   nginx:
+    #     image: nginx:alpine
+    #     container_name: expense_nginx
+    #     volumes:
+    #       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    #       - static_volume:/app/staticfiles:ro
+    #     ports:
+    #       - "80:80"
+    #       - "443:443"
+    #     depends_on:
+    #       - backend
+    #       - frontend
+    #     restart: unless-stopped
+
+    # volumes:
+    #   postgres_data_prod:
+    #   static_volume:
+

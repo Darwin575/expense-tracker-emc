@@ -1,0 +1,43 @@
+pipeline {
+    agent {
+        label 'team-b-be-expense-tracker'
+    }
+    environment {
+        DOCKER_IMAGE = 'team-b-be-expense-tracker'
+        CONTAINER_NAME = 'team-b-be-expense-tracker'
+        HOST_PORT = '8000'       // Port on the host machine
+        CONTAINER_PORT = '8000'  // Port inside the container
+    }
+
+
+    stages {
+        stage('Build') {
+            steps {
+                script {
+                    if (env.GIT_BRANCH == 'origin/testing') {
+                        sh "docker build -t ${DOCKER_IMAGE} -f Dockerfile ."
+                    }
+                }
+            }
+        }
+ 
+        stage('Deploy') {
+            steps {
+                script {
+                    if (env.GIT_BRANCH == 'origin/testing') {
+                        // Stop and remove the existing container if it exists
+                        sh "docker rm -f ${CONTAINER_NAME} || true"
+                        
+                        // Run the new container
+                        sh "docker run -d -p ${HOST_PORT}:${CONTAINER_PORT} --name ${CONTAINER_NAME} ${DOCKER_IMAGE}"
+                        
+                        // Clean up unused Docker resources
+                        sh 'docker system prune -f'
+                    }
+                }
+            }
+        }
+    }
+}
+
+   
